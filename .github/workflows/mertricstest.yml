@@ -18,7 +18,7 @@ jobs:
 
   metricstest:
     runs-on: ubuntu-latest
-    container: golang:1.27
+    container: golang:1.25
     needs: branchtest
 
     services:
