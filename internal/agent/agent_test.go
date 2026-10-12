@@ -4,208 +4,276 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
-func TestNew(t *testing.T) {
-	t.Parallel()
+// testServer — тестовый HTTP-сервер, потокобезопасно запоминающий пути запросов.
+type testServer struct {
+	*httptest.Server
+	mu    sync.Mutex
+	paths []string
+}
 
+func newTestServer(t *testing.T, status int) *testServer {
+	t.Helper()
+	ts := &testServer{}
+	ts.Server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		ts.mu.Lock()
+		ts.paths = append(ts.paths, r.URL.Path)
+		ts.mu.Unlock()
+		w.WriteHeader(status)
+	}))
+	t.Cleanup(ts.Close)
+	return ts
+}
+
+// Paths возвращает копию путей всех полученных запросов.
+func (ts *testServer) Paths() []string {
+	ts.mu.Lock()
+	defer ts.mu.Unlock()
+	return append([]string(nil), ts.paths...)
+}
+
+// CountPrefix считает запросы, путь которых начинается с prefix.
+func (ts *testServer) CountPrefix(prefix string) int {
+	n := 0
+	for _, p := range ts.Paths() {
+		if strings.HasPrefix(p, prefix) {
+			n++
+		}
+	}
+	return n
+}
+
+func TestNew(t *testing.T) {
+	type want struct {
+		panic bool
+	}
 	tests := []struct {
 		name           string
 		serverAddr     string
 		pollInterval   time.Duration
 		reportInterval time.Duration
-		wantPanic      bool
+		want           want
 	}{
-		{"пустой serverAddr", "", 1 * time.Second, 1 * time.Second, true},
-		{"ноль pollInterval", "http://localhost:8080", 0, 1 * time.Second, true},
-		{"ноль reportInterval", "http://localhost:8080", 1 * time.Second, 0, true},
-		{"валидные параметры", "http://localhost:8080", 1 * time.Second, 2 * time.Second, false},
+		{
+			name:           "пустой serverAddr",
+			serverAddr:     "",
+			pollInterval:   time.Second,
+			reportInterval: time.Second,
+			want:           want{panic: true},
+		},
+		{
+			name:           "нулевой pollInterval",
+			serverAddr:     "http://localhost:8080",
+			pollInterval:   0,
+			reportInterval: time.Second,
+			want:           want{panic: true},
+		},
+		{
+			name:           "нулевой reportInterval",
+			serverAddr:     "http://localhost:8080",
+			pollInterval:   time.Second,
+			reportInterval: 0,
+			want:           want{panic: true},
+		},
+		{
+			name:           "валидные параметры",
+			serverAddr:     "http://localhost:8080",
+			pollInterval:   2 * time.Second,
+			reportInterval: 10 * time.Second,
+			want:           want{panic: false},
+		},
 	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			defer func() {
-				if r := recover(); r == nil && tt.wantPanic {
-					t.Errorf("ожидалась паника, но её не было")
-				} else if r != nil && !tt.wantPanic {
-					t.Errorf("неожиданная паника: %v", r)
-				}
-			}()
-
-			a := New(tt.serverAddr, tt.pollInterval, tt.reportInterval)
-			if a == nil && !tt.wantPanic {
-				t.Errorf("ожидался Agent, получено nil")
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			create := func() {
+				New(test.serverAddr, test.pollInterval, test.reportInterval)
 			}
+
+			if test.want.panic {
+				assert.Panics(t, create)
+				return
+			}
+			require.NotPanics(t, create)
+
+			a := New(test.serverAddr, test.pollInterval, test.reportInterval)
+			assert.Equal(t, test.serverAddr, a.serverAddr)
+			assert.Equal(t, test.pollInterval, a.pollInterval)
+			assert.Equal(t, test.reportInterval, a.reportInterval)
+			assert.NotNil(t, a.store)
+			require.NotNil(t, a.httpClient)
+			assert.NotZero(t, a.httpClient.Timeout)
 		})
 	}
 }
 
 func TestGetMetrics(t *testing.T) {
-	t.Parallel()
-
-	a := New("http://localhost:9999", time.Second, time.Second)
-
-	a.getMetrics()
-
-	val, ok := a.store.GetGaugeMetric("RandomValue")
-	if !ok {
-		t.Error("ожидалась метрика RandomValue")
+	type want struct {
+		pollCount int64
 	}
-	if val < 0 || val > 1 {
-		t.Errorf("RandomValue должен быть в диапазоне [0, 1], получено %f", val)
+	tests := []struct {
+		name  string
+		polls int
+		want  want
+	}{
+		{
+			name:  "один опрос",
+			polls: 1,
+			want:  want{pollCount: 1},
+		},
+		{
+			name:  "три опроса",
+			polls: 3,
+			want:  want{pollCount: 3},
+		},
 	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			a := New("http://localhost:8080", time.Second, time.Second)
 
-	count, ok := a.store.GetCounterMetric("PollCount")
-	if !ok {
-		t.Error("ожидалась метрика PollCount")
-	}
-	if count != 1 {
-		t.Errorf("ожидался PollCount=1, получено %d", count)
-	}
+			for i := 0; i < test.polls; i++ {
+				a.getMetrics()
+			}
 
-	heapAlloc, ok := a.store.GetGaugeMetric("HeapAlloc")
-	if !ok {
-		t.Error("ожидалась метрика HeapAlloc")
-	}
-	if heapAlloc <= 0 {
-		t.Errorf("HeapAlloc должен быть > 0, получено %f", heapAlloc)
+			count, ok := a.store.GetCounterMetric("PollCount")
+			require.True(t, ok, "нет метрики PollCount")
+			assert.Equal(t, test.want.pollCount, count)
+
+			rnd, ok := a.store.GetGaugeMetric("RandomValue")
+			require.True(t, ok, "нет метрики RandomValue")
+			assert.GreaterOrEqual(t, rnd, 0.0)
+			assert.Less(t, rnd, 1.0) // rand.Float64() возвращает [0, 1)
+
+			heapAlloc, ok := a.store.GetGaugeMetric("HeapAlloc")
+			require.True(t, ok, "нет метрики HeapAlloc")
+			assert.Positive(t, heapAlloc)
+		})
 	}
 }
 
 func TestSend(t *testing.T) {
-	t.Parallel()
-
-	var receivedGauges int
-	var receivedCounters int
-
-	testServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		path := r.URL.Path
-		if len(path) < 9 {
-			w.WriteHeader(http.StatusBadRequest)
-			return
-		}
-
-		if path[9:14] == "gauge" {
-			receivedGauges++
-		} else if path[9:16] == "counter" {
-			receivedCounters++
-		}
-
-		w.WriteHeader(http.StatusOK)
-	}))
-	defer testServer.Close()
-
-	a := New(testServer.URL, time.Second, time.Second)
-
-	// Добавляем тестовые метрики
-	a.store.SetGaugeMetric("TestGauge", 42.0)
-	a.store.AddCounterMetric("TestCounter", 10)
-
-	a.send()
-
-	if receivedGauges == 0 {
-		t.Error("ожидалась отправка gauge-метрик")
+	type want struct {
+		gauges   int
+		counters int
+		paths    []string
 	}
-	if receivedCounters == 0 {
-		t.Error("ожидалась отправка counter-метрик")
+	tests := []struct {
+		name     string
+		gauges   map[string]float64
+		counters map[string]int64
+		want     want
+	}{
+		{
+			name:     "gauge и counter",
+			gauges:   map[string]float64{"TestGauge": 42},
+			counters: map[string]int64{"TestCounter": 10},
+			want: want{
+				gauges:   1,
+				counters: 1,
+				paths:    []string{"/update/gauge/TestGauge/42", "/update/counter/TestCounter/10"},
+			},
+		},
+		{
+			name:   "дробный gauge",
+			gauges: map[string]float64{"Frac": 0.125},
+			want: want{
+				gauges: 1,
+				paths:  []string{"/update/gauge/Frac/0.125"},
+			},
+		},
+		{
+			name: "пустое хранилище",
+			want: want{},
+		},
 	}
-}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			srv := newTestServer(t, http.StatusOK)
+			a := New(srv.URL, time.Second, time.Second)
 
-func TestSendMetric_Success(t *testing.T) {
-	t.Parallel()
+			for name, v := range test.gauges {
+				require.NoError(t, a.store.SetGaugeMetric(name, v))
+			}
+			for name, v := range test.counters {
+				require.NoError(t, a.store.AddCounterMetric(name, v))
+			}
 
-	var receivedPath string
-	testServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		receivedPath = r.URL.Path
-		w.WriteHeader(http.StatusOK)
-	}))
-	defer testServer.Close()
+			// send() синхронный: после возврата все запросы уже обработаны.
+			a.send()
 
-	a := New(testServer.URL, time.Second, time.Second)
-
-	statusCode, err := a.sendMetric("gauge", "TestMetric", "42")
-	if err != nil {
-		t.Fatalf("неожиданная ошибка: %v", err)
-	}
-	if statusCode != http.StatusOK {
-		t.Errorf("ожидался статус 200, получено %d", statusCode)
-	}
-	if receivedPath != "/update/gauge/TestMetric/42" {
-		t.Errorf("ожидался путь /update/gauge/TestMetric/42, получено %s", receivedPath)
+			assert.Equal(t, test.want.gauges, srv.CountPrefix("/update/gauge/"))
+			assert.Equal(t, test.want.counters, srv.CountPrefix("/update/counter/"))
+			assert.ElementsMatch(t, test.want.paths, srv.Paths())
+		})
 	}
 }
 
-func TestSendMetric_Error(t *testing.T) {
-	t.Parallel()
-
-	a := New("http://localhost:1", time.Second, time.Second)
-
-	_, err := a.sendMetric("gauge", "TestMetric", "42")
-	if err == nil {
-		t.Error("ожидалась ошибка при отправке на недоступный сервер")
+func TestRun(t *testing.T) {
+	type want struct {
+		requests bool
 	}
-}
-
-func TestRun_StopsOnContextCancel(t *testing.T) {
-	t.Parallel()
-
-	a := New("http://localhost:1", 50*time.Millisecond, 100*time.Millisecond)
-
-	ctx, cancel := context.WithCancel(context.Background())
-
-	done := make(chan struct{})
-	go func() {
-		a.Run(ctx)
-		close(done)
-	}()
-
-	time.Sleep(150 * time.Millisecond)
-
-	cancel()
-
-	select {
-	case <-done:
-	case <-time.After(2 * time.Second):
-		t.Error("агент не остановился после отмены контекста")
+	tests := []struct {
+		name           string
+		serverDown     bool
+		pollInterval   time.Duration
+		reportInterval time.Duration
+		want           want
+	}{
+		{
+			name:           "отправляет метрики и останавливается",
+			pollInterval:   20 * time.Millisecond,
+			reportInterval: 100 * time.Millisecond,
+			want:           want{requests: true},
+		},
+		{
+			name:           "останавливается при недоступном сервере",
+			serverDown:     true,
+			pollInterval:   20 * time.Millisecond,
+			reportInterval: 50 * time.Millisecond,
+			want:           want{requests: false},
+		},
 	}
-}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			srv := newTestServer(t, http.StatusOK)
+			if test.serverDown {
+				srv.Close()
+			}
+			a := New(srv.URL, test.pollInterval, test.reportInterval)
 
-func TestRun_SendsMetrics(t *testing.T) {
-	t.Parallel()
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
 
-	var mu sync.Mutex
-	var receivedRequests []string
+			done := make(chan struct{})
+			go func() {
+				a.Run(ctx)
+				close(done)
+			}()
 
-	testServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		mu.Lock()
-		receivedRequests = append(receivedRequests, r.URL.Path)
-		mu.Unlock()
-		w.WriteHeader(http.StatusOK)
-	}))
-	defer testServer.Close()
+			if test.want.requests {
+				require.Eventually(t, func() bool {
+					return srv.CountPrefix("/update/counter/PollCount/") > 0 &&
+						srv.CountPrefix("/update/gauge/RandomValue/") > 0 &&
+						srv.CountPrefix("/update/gauge/HeapAlloc/") > 0
+				}, 2*time.Second, 10*time.Millisecond, "агент не отправил метрики")
+			} else {
+				time.Sleep(3 * test.reportInterval)
+			}
 
-	a := New(testServer.URL, 50*time.Millisecond, 100*time.Millisecond)
+			cancel()
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
-	done := make(chan struct{})
-	go func() {
-		a.Run(ctx)
-		close(done)
-	}()
-
-	time.Sleep(300 * time.Millisecond)
-	cancel()
-	<-done
-
-	mu.Lock()
-	defer mu.Unlock()
-
-	if len(receivedRequests) == 0 {
-		t.Error("ожидались отправленные метрики")
+			select {
+			case <-done:
+			case <-time.After(2 * time.Second):
+				require.Fail(t, "агент не остановился после отмены контекста")
+			}
+		})
 	}
 }

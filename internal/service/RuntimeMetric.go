@@ -32,5 +32,11 @@ func GetRuntimeMetrics() []RuntimeMetric {
 		{"NextGC", float64(m.NextGC)},
 		{"NumForcedGC", float64(m.NumForcedGC)},
 		{"NumGC", float64(m.NumGC)},
+		{"OtherSys", float64(m.OtherSys)},
+		{"PauseTotalNs", float64(m.PauseTotalNs)},
+		{"StackInuse", float64(m.StackInuse)},
+		{"StackSys", float64(m.StackSys)},
+		{"Sys", float64(m.Sys)},
+		{"TotalAlloc", float64(m.TotalAlloc)},
 	}
 }
