@@ -5,6 +5,6 @@ import (
 )
 
 func main() {
-	srv := server.New("8080")
+	srv := server.New()
 	srv.Run()
 }

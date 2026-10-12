@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"sync"
 	"testing"
 	"time"
 )
@@ -42,93 +43,169 @@ func TestNew(t *testing.T) {
 	}
 }
 
-func TestHandleUpdate_Gauge(t *testing.T) {
+func TestGetMetrics(t *testing.T) {
+	t.Parallel()
+
 	a := New("http://localhost:9999", time.Second, time.Second)
 
-	tests := []struct {
-		name     string
-		path     string
-		wantCode int
-	}{
-		{"валидный gauge", "/update/gauge/testGauge/100", http.StatusOK},
-		{"без id", "/update/gauge/", http.StatusNotFound},
-		{"некорректный value", "/update/gauge/testGauge/none", http.StatusBadRequest},
+	a.getMetrics()
+
+	val, ok := a.store.GetGaugeMetric("RandomValue")
+	if !ok {
+		t.Error("ожидалась метрика RandomValue")
+	}
+	if val < 0 || val > 1 {
+		t.Errorf("RandomValue должен быть в диапазоне [0, 1], получено %f", val)
 	}
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			req := httptest.NewRequest("POST", tt.path, nil)
-			req.Header.Set("Content-Type", "text/plain")
-			w := httptest.NewRecorder()
+	count, ok := a.store.GetCounterMetric("PollCount")
+	if !ok {
+		t.Error("ожидалась метрика PollCount")
+	}
+	if count != 1 {
+		t.Errorf("ожидался PollCount=1, получено %d", count)
+	}
 
-			a.handleUpdate(w, req)
-
-			if w.Code != tt.wantCode {
-				t.Errorf("ожидался статус %d, получено %d", tt.wantCode, w.Code)
-			}
-		})
+	heapAlloc, ok := a.store.GetGaugeMetric("HeapAlloc")
+	if !ok {
+		t.Error("ожидалась метрика HeapAlloc")
+	}
+	if heapAlloc <= 0 {
+		t.Errorf("HeapAlloc должен быть > 0, получено %f", heapAlloc)
 	}
 }
 
-func TestHandleUpdate_Counter(t *testing.T) {
-	a := New("http://localhost:9999", time.Second, time.Second)
+func TestSend(t *testing.T) {
+	t.Parallel()
 
-	tests := []struct {
-		name     string
-		path     string
-		wantCode int
-	}{
-		{"валидный counter", "/update/counter/testCounter/100", http.StatusOK},
-		{"без id", "/update/counter/", http.StatusNotFound},
-		{"некорректный value", "/update/counter/testCounter/none", http.StatusBadRequest},
+	var receivedGauges int
+	var receivedCounters int
+
+	testServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		path := r.URL.Path
+		if len(path) < 9 {
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+
+		if path[9:14] == "gauge" {
+			receivedGauges++
+		} else if path[9:16] == "counter" {
+			receivedCounters++
+		}
+
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer testServer.Close()
+
+	a := New(testServer.URL, time.Second, time.Second)
+
+	// Добавляем тестовые метрики
+	a.store.SetGaugeMetric("TestGauge", 42.0)
+	a.store.AddCounterMetric("TestCounter", 10)
+
+	a.send()
+
+	if receivedGauges == 0 {
+		t.Error("ожидалась отправка gauge-метрик")
 	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			req := httptest.NewRequest("POST", tt.path, nil)
-			req.Header.Set("Content-Type", "text/plain")
-			w := httptest.NewRecorder()
-
-			a.handleUpdate(w, req)
-
-			if w.Code != tt.wantCode {
-				t.Errorf("ожидался статус %d, получено %d", tt.wantCode, w.Code)
-			}
-		})
-	}
-}
-
-func TestHandleUpdate_UnknownType(t *testing.T) {
-	a := New("http://localhost:9999", time.Second, time.Second)
-
-	req := httptest.NewRequest("POST", "/update/unknown/testCounter/100", nil)
-	req.Header.Set("Content-Type", "text/plain")
-	w := httptest.NewRecorder()
-
-	a.handleUpdate(w, req)
-
-	if w.Code != http.StatusBadRequest {
-		t.Errorf("ожидался статус %d, получено %d", http.StatusBadRequest, w.Code)
+	if receivedCounters == 0 {
+		t.Error("ожидалась отправка counter-метрик")
 	}
 }
 
-func TestRun_ListensOnPort(t *testing.T) {
-	a := New("http://localhost:9999", 100*time.Millisecond, 200*time.Millisecond)
+func TestSendMetric_Success(t *testing.T) {
+	t.Parallel()
+
+	var receivedPath string
+	testServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		receivedPath = r.URL.Path
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer testServer.Close()
+
+	a := New(testServer.URL, time.Second, time.Second)
+
+	statusCode, err := a.sendMetric("gauge", "TestMetric", "42")
+	if err != nil {
+		t.Fatalf("неожиданная ошибка: %v", err)
+	}
+	if statusCode != http.StatusOK {
+		t.Errorf("ожидался статус 200, получено %d", statusCode)
+	}
+	if receivedPath != "/update/gauge/TestMetric/42" {
+		t.Errorf("ожидался путь /update/gauge/TestMetric/42, получено %s", receivedPath)
+	}
+}
+
+func TestSendMetric_Error(t *testing.T) {
+	t.Parallel()
+
+	a := New("http://localhost:1", time.Second, time.Second)
+
+	_, err := a.sendMetric("gauge", "TestMetric", "42")
+	if err == nil {
+		t.Error("ожидалась ошибка при отправке на недоступный сервер")
+	}
+}
+
+func TestRun_StopsOnContextCancel(t *testing.T) {
+	t.Parallel()
+
+	a := New("http://localhost:1", 50*time.Millisecond, 100*time.Millisecond)
+
+	ctx, cancel := context.WithCancel(context.Background())
+
+	done := make(chan struct{})
+	go func() {
+		a.Run(ctx)
+		close(done)
+	}()
+
+	time.Sleep(150 * time.Millisecond)
+
+	cancel()
+
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Error("агент не остановился после отмены контекста")
+	}
+}
+
+func TestRun_SendsMetrics(t *testing.T) {
+	t.Parallel()
+
+	var mu sync.Mutex
+	var receivedRequests []string
+
+	testServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		receivedRequests = append(receivedRequests, r.URL.Path)
+		mu.Unlock()
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer testServer.Close()
+
+	a := New(testServer.URL, 50*time.Millisecond, 100*time.Millisecond)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	go a.Run(ctx)
+	done := make(chan struct{})
+	go func() {
+		a.Run(ctx)
+		close(done)
+	}()
 
-	time.Sleep(200 * time.Millisecond)
+	time.Sleep(300 * time.Millisecond)
+	cancel()
+	<-done
 
-	resp, err := http.Post("http://localhost:8080/update/gauge/test/42", "text/plain", nil)
-	if err != nil {
-		t.Fatalf("не удалось сделать запрос: %v", err)
-	}
-	defer resp.Body.Close()
+	mu.Lock()
+	defer mu.Unlock()
 
-	if resp.StatusCode != http.StatusOK {
-		t.Errorf("ожидался статус 200, получено %d", resp.StatusCode)
+	if len(receivedRequests) == 0 {
+		t.Error("ожидались отправленные метрики")
 	}
 }

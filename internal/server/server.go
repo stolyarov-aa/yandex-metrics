@@ -15,12 +15,16 @@ type Server struct {
 	port string
 }
 
-func New(port string) *Server {
-	if err := validatePort(port); err != nil {
-		log.Fatalf("%s", err)
-	}
-	return &Server{port: port}
+func New() *Server {
+	return &Server{port: "8080"}
 }
+
+// func New(port string) *Server {
+// 	if err := validatePort(port); err != nil {
+// 		log.Fatalf("%s", err)
+// 	}
+// 	return &Server{port: port}
+// }
 
 func (s *Server) Run() {
 	if err := validatePort(s.port); err != nil {

@@ -19,7 +19,6 @@ type Agent struct {
 	serverAddr     string
 	pollInterval   time.Duration
 	reportInterval time.Duration
-	listenAddr     string
 	httpClient     *http.Client
 }
 
@@ -39,7 +38,6 @@ func New(serverAddr string, pollInterval time.Duration, reportInterval time.Dura
 		serverAddr:     serverAddr,
 		pollInterval:   pollInterval,
 		reportInterval: reportInterval,
-		listenAddr:     ":8080",
 		httpClient: &http.Client{
 			Timeout: 10 * time.Second,
 		},
@@ -51,87 +49,19 @@ func (a *Agent) Run(ctx context.Context) {
 	a.store.AddCounterMetric("PollCount", 0)
 	a.store.SetGaugeMetric("RandomValue", rand.Float64())
 
-	server := &http.Server{
-		Addr:    a.listenAddr,
-		Handler: a.buildHandler(),
-	}
-
-	go func() {
-		<-ctx.Done()
-		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-		server.Shutdown(shutdownCtx)
-	}()
-
 	go a.startPolling(ctx)
 
-	log.Printf("Агент слушает на %s", a.listenAddr)
-	if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-		log.Fatalf("Ошибка HTTP-сервера: %v", err)
-	}
-}
-
-func (a *Agent) buildHandler() http.Handler {
-	mux := http.NewServeMux()
-	mux.HandleFunc("/update/", a.handleUpdate)
-	return mux
-}
-
-func (a *Agent) handleUpdate(w http.ResponseWriter, r *http.Request) {
-	parts := splitPath(r.URL.Path)
-	if len(parts) < 4 {
-		http.NotFound(w, r)
-		return
-	}
-
-	metricType := parts[1]
-	metricID := parts[2]
-	metricValue := parts[3]
-
-	switch metricType {
-	case "gauge":
-		val, err := strconv.ParseFloat(metricValue, 64)
-		if err != nil {
-			http.Error(w, "Invalid gauge value", http.StatusBadRequest)
+	ticker := time.NewTicker(a.reportInterval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			log.Println("Агент остановлен")
 			return
-		}
-		a.store.SetGaugeMetric(metricID, val)
-	case "counter":
-		val, err := strconv.ParseInt(metricValue, 10, 64)
-		if err != nil {
-			http.Error(w, "Invalid counter value", http.StatusBadRequest)
-			return
-		}
-		a.store.AddCounterMetric(metricID, val)
-	default:
-		http.Error(w, "Unknown metric type", http.StatusBadRequest)
-		return
-	}
-
-	w.WriteHeader(http.StatusOK)
-}
-
-func splitPath(path string) []string {
-	var parts []string
-	for _, p := range splitN(path, '/') {
-		if p != "" {
-			parts = append(parts, p)
+		case <-ticker.C:
+			a.send()
 		}
 	}
-	return parts
-}
-
-func splitN(s string, sep byte) []string {
-	var result []string
-	start := 0
-	for i := 0; i < len(s); i++ {
-		if s[i] == sep {
-			result = append(result, s[start:i])
-			start = i + 1
-		}
-	}
-	result = append(result, s[start:])
-	return result
 }
 
 func (a *Agent) startPolling(ctx context.Context) {
