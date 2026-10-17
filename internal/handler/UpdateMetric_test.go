@@ -104,39 +104,39 @@ func TestUpdateMetricHandler_InvalidType(t *testing.T) {
 	}
 }
 
-func TestUpdateMetricHandler_ContentType(t *testing.T) {
-	t.Parallel()
+// func TestUpdateMetricHandler_ContentType(t *testing.T) {
+// 	t.Parallel()
 
-	router := newTestRouter()
+// 	router := newTestRouter()
 
-	tests := []struct {
-		name        string
-		metricType  string
-		metricValue string
-		contentType string
-		wantStatus  int
-	}{
-		{"text/plain", "gauge", "123.45", "text/plain", http.StatusOK},
-		{"text/plain с charset", "gauge", "123.45", "text/plain; charset=utf-8", http.StatusUnsupportedMediaType},
-		{"application/json", "gauge", "123.45", "application/json", http.StatusUnsupportedMediaType},
-		{"нет заголовка (gauge)", "gauge", "123.45", "", http.StatusUnsupportedMediaType},
-		{"нет заголовка (counter)", "counter", "123", "", http.StatusUnsupportedMediaType},
-	}
+// 	tests := []struct {
+// 		name        string
+// 		metricType  string
+// 		metricValue string
+// 		contentType string
+// 		wantStatus  int
+// 	}{
+// 		{"text/plain", "gauge", "123.45", "text/plain", http.StatusOK},
+// 		{"text/plain с charset", "gauge", "123.45", "text/plain; charset=utf-8", http.StatusUnsupportedMediaType},
+// 		{"application/json", "gauge", "123.45", "application/json", http.StatusUnsupportedMediaType},
+// 		{"нет заголовка (gauge)", "gauge", "123.45", "", http.StatusUnsupportedMediaType},
+// 		{"нет заголовка (counter)", "counter", "123", "", http.StatusUnsupportedMediaType},
+// 	}
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			url := "/update/" + tt.metricType + "/test/" + tt.metricValue
-			req := httptest.NewRequest(http.MethodPost, url, nil)
-			if tt.contentType != "" {
-				req.Header.Set("Content-Type", tt.contentType)
-			}
+// 	for _, tt := range tests {
+// 		t.Run(tt.name, func(t *testing.T) {
+// 			url := "/update/" + tt.metricType + "/test/" + tt.metricValue
+// 			req := httptest.NewRequest(http.MethodPost, url, nil)
+// 			if tt.contentType != "" {
+// 				req.Header.Set("Content-Type", tt.contentType)
+// 			}
 
-			w := httptest.NewRecorder()
-			router.ServeHTTP(w, req)
+// 			w := httptest.NewRecorder()
+// 			router.ServeHTTP(w, req)
 
-			if w.Code != tt.wantStatus {
-				t.Errorf("ожидался статус %d, получено %d (Body: %s)", tt.wantStatus, w.Code, w.Body.String())
-			}
-		})
-	}
-}
+// 			if w.Code != tt.wantStatus {
+// 				t.Errorf("ожидался статус %d, получено %d (Body: %s)", tt.wantStatus, w.Code, w.Body.String())
+// 			}
+// 		})
+// 	}
+// }

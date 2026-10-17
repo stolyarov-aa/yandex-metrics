@@ -5,15 +5,13 @@ import (
 	"net/http"
 
 	"github.com/go-chi/chi/v5"
-	"github.com/stolyarov-aa/yandex-metrics/internal/repository"
 )
 
 func (h *HandlerHub) GetMetricHandler(w http.ResponseWriter, r *http.Request) {
 	metricType := chi.URLParam(r, "type")
 	metricName := chi.URLParam(r, "name")
 
-	var store repository.MemStorageIntf
-	store = h.store
+	store := h.store
 
 	switch metricType {
 	case "counter":

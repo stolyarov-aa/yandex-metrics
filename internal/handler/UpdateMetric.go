@@ -7,12 +7,9 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	errs "github.com/stolyarov-aa/yandex-metrics/internal/errors"
-	"github.com/stolyarov-aa/yandex-metrics/internal/repository"
 )
 
 func updateMetric(h *HandlerHub, metricType string, metricName string, metricValue interface{}) error {
-	var s repository.MemStorageIntf = h.store
-
 	if metricType != "gauge" && metricType != "counter" {
 		return &errs.InvalidMetricTypeError{MetricType: metricType}
 	} else if metricName == "" {
@@ -24,25 +21,25 @@ func updateMetric(h *HandlerHub, metricType string, metricName string, metricVal
 		if metricType != "gauge" {
 			return &errs.InvalidMetricDataTypeError{MetricType: metricType, DataType: fmt.Sprintf("%T", v)}
 		}
-		s.SetGaugeMetric(metricName, v)
+		h.store.SetGaugeMetric(metricName, v)
 	case int64:
 		if metricType != "counter" {
 			return &errs.InvalidMetricDataTypeError{MetricType: metricType, DataType: fmt.Sprintf("%T", v)}
 		}
-		s.AddCounterMetric(metricName, v)
+		h.store.AddCounterMetric(metricName, v)
 	case string:
 		switch metricType {
 		case "gauge":
 			if n, err := strconv.ParseFloat(v, 64); err != nil {
 				return &errs.InvalidMetricDataTypeError{MetricType: metricType, MetricName: metricName, DataType: fmt.Sprintf("%T", v)}
 			} else {
-				s.SetGaugeMetric(metricName, n)
+				h.store.SetGaugeMetric(metricName, n)
 			}
 		case "counter":
 			if n, err := strconv.ParseInt(v, 10, 64); err != nil {
 				return &errs.InvalidMetricDataTypeError{MetricType: metricType, MetricName: metricName, DataType: fmt.Sprintf("%T", v)}
 			} else {
-				s.AddCounterMetric(metricName, n)
+				h.store.AddCounterMetric(metricName, n)
 			}
 		default:
 			return &errs.InvalidMetricDataTypeError{MetricType: metricType, MetricName: metricName, DataType: fmt.Sprintf("%T", v)}

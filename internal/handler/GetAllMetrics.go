@@ -3,13 +3,10 @@ package handler
 import (
 	"fmt"
 	"net/http"
-
-	"github.com/stolyarov-aa/yandex-metrics/internal/repository"
 )
 
 func (h *HandlerHub) GetAllMetricsHandler(w http.ResponseWriter, r *http.Request) {
-	var store repository.MemStorageIntf
-	store = h.store
+	store := h.store
 
 	counterMetrics := store.GetAllCounterMetrics()
 	gaugeMetrics := store.GetAllGaugeMetrics()
