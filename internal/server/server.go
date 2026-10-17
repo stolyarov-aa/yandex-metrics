@@ -6,9 +6,10 @@ import (
 	"net/http"
 	"strconv"
 
-	"github.com/gorilla/mux"
+	"github.com/go-chi/chi/v5"
 
 	"github.com/stolyarov-aa/yandex-metrics/internal/handler"
+	"github.com/stolyarov-aa/yandex-metrics/internal/storage"
 )
 
 type Server struct {
@@ -19,22 +20,18 @@ func New() *Server {
 	return &Server{port: "8080"}
 }
 
-// func New(port string) *Server {
-// 	if err := validatePort(port); err != nil {
-// 		log.Fatalf("%s", err)
-// 	}
-// 	return &Server{port: port}
-// }
-
 func (s *Server) Run() {
 	if err := validatePort(s.port); err != nil {
 		log.Fatalf("%s", err)
 	}
 
-	r := mux.NewRouter()
-	r.StrictSlash(false)
+	hub := handler.NewHandlerHub(storage.NewMemStorage())
 
-	r.HandleFunc("/update/{type}/{name}/{value}", handler.UpdateMetricHandler).Methods("POST")
+	r := chi.NewRouter()
+
+	r.Get("/", hub.GetAllMetricsHandler)
+	r.Get("/value/{type}/{name}", hub.GetMetricHandler)
+	r.Post("/update/{type}/{name}/{value}", hub.UpdateMetricHandler)
 
 	fmt.Printf("Server starting on : %s\n", s.port)
 	log.Fatal(http.ListenAndServe(fmt.Sprintf(":%s", s.port), r))

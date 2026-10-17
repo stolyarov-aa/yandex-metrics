@@ -5,14 +5,13 @@ import (
 	"net/http"
 	"strconv"
 
-	"github.com/gorilla/mux"
+	"github.com/go-chi/chi/v5"
 	errs "github.com/stolyarov-aa/yandex-metrics/internal/errors"
 	"github.com/stolyarov-aa/yandex-metrics/internal/repository"
-	"github.com/stolyarov-aa/yandex-metrics/internal/storage"
 )
 
-func updateMetric(metricType string, metricName string, metricValue interface{}) error {
-	var s repository.MemStorageIntf = storage.NewMemStorage()
+func updateMetric(h *HandlerHub, metricType string, metricName string, metricValue interface{}) error {
+	var s repository.MemStorageIntf = h.store
 
 	if metricType != "gauge" && metricType != "counter" {
 		return &errs.InvalidMetricTypeError{MetricType: metricType}
@@ -55,18 +54,17 @@ func updateMetric(metricType string, metricName string, metricValue interface{})
 	return nil
 }
 
-func UpdateMetricHandler(w http.ResponseWriter, r *http.Request) {
-	if str := r.Header.Get("Content-Type"); str != "text/plain" {
-		http.Error(w, "Content-Type должен быть text/plain", http.StatusUnsupportedMediaType)
-		return
-	}
+func (h *HandlerHub) UpdateMetricHandler(w http.ResponseWriter, r *http.Request) {
+	// if str := r.Header.Get("Content-Type"); str != "text/plain" {
+	// 	http.Error(w, "Content-Type должен быть text/plain", http.StatusUnsupportedMediaType)
+	// 	return
+	// }
 
-	vars := mux.Vars(r)
-	metricType := vars["type"]
-	metricName := vars["name"]
-	metricValue := vars["value"]
+	metricType := chi.URLParam(r, "type")
+	metricName := chi.URLParam(r, "name")
+	metricValue := chi.URLParam(r, "value")
 
-	if err := updateMetric(metricType, metricName, metricValue); err != nil {
+	if err := updateMetric(h, metricType, metricName, metricValue); err != nil {
 		switch err.(type) {
 		case *errs.InvalidMetricTypeError:
 			http.Error(w, err.Error(), http.StatusBadRequest)

@@ -5,24 +5,25 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"github.com/gorilla/mux"
+	"github.com/go-chi/chi/v5"
+	"github.com/stolyarov-aa/yandex-metrics/internal/storage"
 )
 
-func newUpdateRequest(metricType, metricName, metricValue, contentType string) *http.Request {
-	url := "/update/" + metricType + "/" + metricName + "/" + metricValue
-	req := httptest.NewRequest(http.MethodPost, url, nil)
-	if contentType != "" {
-		req.Header.Set("Content-Type", contentType)
-	}
-	return mux.SetURLVars(req, map[string]string{
-		"type":  metricType,
-		"name":  metricName,
-		"value": metricValue,
+func newTestRouter() *chi.Mux {
+	r := chi.NewRouter()
+	r.Post("/update/{type}/{name}/{value}", func(w http.ResponseWriter, r *http.Request) {
+		hub := &HandlerHub{
+			store: storage.NewMemStorage(),
+		}
+		hub.UpdateMetricHandler(w, r)
 	})
+	return r
 }
 
 func TestUpdateMetricHandler_Gauge(t *testing.T) {
 	t.Parallel()
+
+	router := newTestRouter()
 
 	tests := []struct {
 		name        string
@@ -39,9 +40,12 @@ func TestUpdateMetricHandler_Gauge(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			req := newUpdateRequest("gauge", tt.metricName, tt.metricValue, "text/plain")
+			url := "/update/gauge/" + tt.metricName + "/" + tt.metricValue
+			req := httptest.NewRequest(http.MethodPost, url, nil)
+			req.Header.Set("Content-Type", "text/plain")
+
 			w := httptest.NewRecorder()
-			UpdateMetricHandler(w, req)
+			router.ServeHTTP(w, req)
 
 			if w.Code != tt.wantStatus {
 				t.Errorf("ожидался статус %d, получено %d (Body: %s)", tt.wantStatus, w.Code, w.Body.String())
@@ -52,6 +56,8 @@ func TestUpdateMetricHandler_Gauge(t *testing.T) {
 
 func TestUpdateMetricHandler_Counter(t *testing.T) {
 	t.Parallel()
+
+	router := newTestRouter()
 
 	tests := []struct {
 		name        string
@@ -67,9 +73,12 @@ func TestUpdateMetricHandler_Counter(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			req := newUpdateRequest("counter", tt.metricName, tt.metricValue, "text/plain")
+			url := "/update/counter/" + tt.metricName + "/" + tt.metricValue
+			req := httptest.NewRequest(http.MethodPost, url, nil)
+			req.Header.Set("Content-Type", "text/plain")
+
 			w := httptest.NewRecorder()
-			UpdateMetricHandler(w, req)
+			router.ServeHTTP(w, req)
 
 			if w.Code != tt.wantStatus {
 				t.Errorf("ожидался статус %d, получено %d (Body: %s)", tt.wantStatus, w.Code, w.Body.String())
@@ -81,9 +90,14 @@ func TestUpdateMetricHandler_Counter(t *testing.T) {
 func TestUpdateMetricHandler_InvalidType(t *testing.T) {
 	t.Parallel()
 
-	req := newUpdateRequest("invalid", "test", "123", "text/plain")
+	router := newTestRouter()
+
+	url := "/update/invalid/test/123"
+	req := httptest.NewRequest(http.MethodPost, url, nil)
+	req.Header.Set("Content-Type", "text/plain")
+
 	w := httptest.NewRecorder()
-	UpdateMetricHandler(w, req)
+	router.ServeHTTP(w, req)
 
 	if w.Code != http.StatusBadRequest {
 		t.Errorf("ожидался статус %d, получено %d (Body: %s)", http.StatusBadRequest, w.Code, w.Body.String())
@@ -93,6 +107,8 @@ func TestUpdateMetricHandler_InvalidType(t *testing.T) {
 func TestUpdateMetricHandler_ContentType(t *testing.T) {
 	t.Parallel()
 
+	router := newTestRouter()
+
 	tests := []struct {
 		name        string
 		metricType  string
@@ -101,7 +117,6 @@ func TestUpdateMetricHandler_ContentType(t *testing.T) {
 		wantStatus  int
 	}{
 		{"text/plain", "gauge", "123.45", "text/plain", http.StatusOK},
-		// хендлер сравнивает заголовок строго, поэтому параметры не допускаются
 		{"text/plain с charset", "gauge", "123.45", "text/plain; charset=utf-8", http.StatusUnsupportedMediaType},
 		{"application/json", "gauge", "123.45", "application/json", http.StatusUnsupportedMediaType},
 		{"нет заголовка (gauge)", "gauge", "123.45", "", http.StatusUnsupportedMediaType},
@@ -110,9 +125,14 @@ func TestUpdateMetricHandler_ContentType(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			req := newUpdateRequest(tt.metricType, "test", tt.metricValue, tt.contentType)
+			url := "/update/" + tt.metricType + "/test/" + tt.metricValue
+			req := httptest.NewRequest(http.MethodPost, url, nil)
+			if tt.contentType != "" {
+				req.Header.Set("Content-Type", tt.contentType)
+			}
+
 			w := httptest.NewRecorder()
-			UpdateMetricHandler(w, req)
+			router.ServeHTTP(w, req)
 
 			if w.Code != tt.wantStatus {
 				t.Errorf("ожидался статус %d, получено %d (Body: %s)", tt.wantStatus, w.Code, w.Body.String())
