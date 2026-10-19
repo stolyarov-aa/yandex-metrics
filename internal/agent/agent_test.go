@@ -13,7 +13,6 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// testServer — тестовый HTTP-сервер, потокобезопасно запоминающий пути запросов.
 type testServer struct {
 	*httptest.Server
 	mu    sync.Mutex
@@ -33,14 +32,12 @@ func newTestServer(t *testing.T, status int) *testServer {
 	return ts
 }
 
-// Paths возвращает копию путей всех полученных запросов.
 func (ts *testServer) Paths() []string {
 	ts.mu.Lock()
 	defer ts.mu.Unlock()
 	return append([]string(nil), ts.paths...)
 }
 
-// CountPrefix считает запросы, путь которых начинается с prefix.
 func (ts *testServer) CountPrefix(prefix string) int {
 	n := 0
 	for _, p := range ts.Paths() {
@@ -53,60 +50,69 @@ func (ts *testServer) CountPrefix(prefix string) int {
 
 func TestNew(t *testing.T) {
 	type want struct {
-		panic bool
+		err            bool
+		serverAddr     string
+		pollInterval   time.Duration
+		reportInterval time.Duration
 	}
 	tests := []struct {
 		name           string
 		serverAddr     string
-		pollInterval   time.Duration
-		reportInterval time.Duration
+		pollInterval   int
+		reportInterval int
 		want           want
 	}{
 		{
-			name:           "пустой serverAddr",
-			serverAddr:     "",
-			pollInterval:   time.Second,
-			reportInterval: time.Second,
-			want:           want{panic: true},
-		},
-		{
-			name:           "нулевой pollInterval",
-			serverAddr:     "http://localhost:8080",
-			pollInterval:   0,
-			reportInterval: time.Second,
-			want:           want{panic: true},
-		},
-		{
-			name:           "нулевой reportInterval",
-			serverAddr:     "http://localhost:8080",
-			pollInterval:   time.Second,
-			reportInterval: 0,
-			want:           want{panic: true},
+			name: "значения по умолчанию",
+			want: want{
+				serverAddr:     "http://localhost:8080",
+				pollInterval:   2 * time.Second,
+				reportInterval: 10 * time.Second,
+			},
 		},
 		{
 			name:           "валидные параметры",
-			serverAddr:     "http://localhost:8080",
-			pollInterval:   2 * time.Second,
-			reportInterval: 10 * time.Second,
-			want:           want{panic: false},
+			serverAddr:     "127.0.0.1:9090",
+			pollInterval:   5,
+			reportInterval: 20,
+			want: want{
+				serverAddr:     "http://127.0.0.1:9090", // New добавляет схему
+				pollInterval:   5 * time.Second,
+				reportInterval: 20 * time.Second,
+			},
+		},
+		{
+			name:           "отрицательный pollInterval",
+			pollInterval:   -1,
+			reportInterval: 10,
+			want:           want{err: true},
+		},
+		{
+			name:           "отрицательный reportInterval",
+			pollInterval:   2,
+			reportInterval: -1,
+			want:           want{err: true},
+		},
+		{
+			name:       "некорректный адрес",
+			serverAddr: "localhost:abc",
+			want:       want{err: true},
 		},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			create := func() {
-				New(test.serverAddr, test.pollInterval, test.reportInterval)
-			}
+			a, err := New(test.serverAddr, test.pollInterval, test.reportInterval)
 
-			if test.want.panic {
-				assert.Panics(t, create)
+			if test.want.err {
+				assert.Error(t, err)
+				assert.Nil(t, a)
 				return
 			}
-			require.NotPanics(t, create)
+			require.NoError(t, err)
 
-			a := New(test.serverAddr, test.pollInterval, test.reportInterval)
-			assert.Equal(t, test.serverAddr, a.serverAddr)
-			assert.Equal(t, test.pollInterval, a.pollInterval)
-			assert.Equal(t, test.reportInterval, a.reportInterval)
+			assert.Equal(t, test.want.serverAddr, a.serverAddr)
+			assert.Equal(t, test.want.pollInterval, a.pollInterval)
+			assert.Equal(t, test.want.reportInterval, a.reportInterval)
 			assert.NotNil(t, a.store)
 			require.NotNil(t, a.httpClient)
 			assert.NotZero(t, a.httpClient.Timeout)
@@ -136,7 +142,8 @@ func TestGetMetrics(t *testing.T) {
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			a := New("http://localhost:8080", time.Second, time.Second)
+			a, err := New("localhost:8080", 1, 1)
+			require.NoError(t, err)
 
 			for i := 0; i < test.polls; i++ {
 				a.getMetrics()
@@ -196,7 +203,8 @@ func TestSend(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			srv := newTestServer(t, http.StatusOK)
-			a := New(srv.URL, time.Second, time.Second)
+			a, err := New(srv.Listener.Addr().String(), 1, 1)
+			require.NoError(t, err)
 
 			for name, v := range test.gauges {
 				require.NoError(t, a.store.SetGaugeMetric(name, v))
@@ -205,7 +213,6 @@ func TestSend(t *testing.T) {
 				require.NoError(t, a.store.AddCounterMetric(name, v))
 			}
 
-			// send() синхронный: после возврата все запросы уже обработаны.
 			a.send()
 
 			assert.Equal(t, test.want.gauges, srv.CountPrefix("/update/gauge/"))
@@ -246,7 +253,11 @@ func TestRun(t *testing.T) {
 			if test.serverDown {
 				srv.Close()
 			}
-			a := New(srv.URL, test.pollInterval, test.reportInterval)
+			a, err := New(srv.Listener.Addr().String(), 1, 1)
+			require.NoError(t, err)
+
+			a.pollInterval = test.pollInterval
+			a.reportInterval = test.reportInterval
 
 			ctx, cancel := context.WithCancel(context.Background())
 			defer cancel()

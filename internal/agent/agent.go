@@ -22,27 +22,39 @@ type Agent struct {
 	httpClient     *http.Client
 }
 
-func New(serverAddr string, pollInterval time.Duration, reportInterval time.Duration) *Agent {
+func New(serverAddr string, pollInterval int, reportInterval int) (*Agent, error) {
 	if serverAddr == "" {
-		panic("Не указан адрес сервера")
+		serverAddr = "localhost:8080"
 	}
 	if pollInterval == 0 {
-		panic("Не указан интервал pollInterval")
+		pollInterval = 2
 	}
 	if reportInterval == 0 {
-		panic("Не указан интервал reportInterval")
+		reportInterval = 10
+	}
+
+	if err := service.ValidateHost(serverAddr); err != nil {
+		return nil, err
+	}
+
+	if pollInterval <= 0 {
+		return nil, fmt.Errorf("Интервал pollInterval должен быть больше нуля")
+	}
+
+	if reportInterval <= 0 {
+		return nil, fmt.Errorf("Интервал reportInterval должен быть больше нуля")
 	}
 
 	a := &Agent{
 		store:          storage.NewMemStorage(),
-		serverAddr:     serverAddr,
-		pollInterval:   pollInterval,
-		reportInterval: reportInterval,
+		serverAddr:     "http://" + serverAddr,
+		pollInterval:   time.Duration(pollInterval) * time.Second,
+		reportInterval: time.Duration(reportInterval) * time.Second,
 		httpClient: &http.Client{
 			Timeout: 10 * time.Second,
 		},
 	}
-	return a
+	return a, nil
 }
 
 func (a *Agent) Run(ctx context.Context) {

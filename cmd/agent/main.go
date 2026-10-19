@@ -2,16 +2,20 @@ package main
 
 import (
 	"context"
+	"log"
 	"os"
 	"os/signal"
 	"syscall"
-	"time"
 
 	"github.com/stolyarov-aa/yandex-metrics/internal/agent"
+	"github.com/stolyarov-aa/yandex-metrics/internal/service"
 )
 
-func runApp(serverAddr string, pollInterval, reportInterval time.Duration) {
-	a := agent.New(serverAddr, pollInterval, reportInterval)
+func runApp(serverAddr string, pollInterval int, reportInterval int) {
+	a, err := agent.New(serverAddr, pollInterval, reportInterval)
+	if err != nil {
+		log.Fatal(err)
+	}
 
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
@@ -20,9 +24,14 @@ func runApp(serverAddr string, pollInterval, reportInterval time.Duration) {
 }
 
 func main() {
-	runApp(
-		"http://localhost:8080",
-		2*time.Second,
-		10*time.Second,
-	)
+	host := ""
+	pollInterval := 0
+	reportInterval := 0
+
+	err := service.ParseFlags(&host, &pollInterval, &reportInterval, os.Args[1:])
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	runApp(host, pollInterval, reportInterval)
 }
