@@ -38,11 +38,11 @@ func New(serverAddr string, pollInterval int, reportInterval int) (*Agent, error
 	}
 
 	if pollInterval <= 0 {
-		return nil, fmt.Errorf("Интервал pollInterval должен быть больше нуля")
+		return nil, fmt.Errorf("интервал pollInterval должен быть больше нуля")
 	}
 
 	if reportInterval <= 0 {
-		return nil, fmt.Errorf("Интервал reportInterval должен быть больше нуля")
+		return nil, fmt.Errorf("интервал reportInterval должен быть больше нуля")
 	}
 
 	a := &Agent{
