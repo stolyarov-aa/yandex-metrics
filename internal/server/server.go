@@ -8,6 +8,7 @@ import (
 	"github.com/go-chi/chi/v5"
 
 	"github.com/stolyarov-aa/yandex-metrics/internal/handler"
+	"github.com/stolyarov-aa/yandex-metrics/internal/server/middleware"
 	"github.com/stolyarov-aa/yandex-metrics/internal/service"
 	"github.com/stolyarov-aa/yandex-metrics/internal/storage"
 )
@@ -32,6 +33,8 @@ func (s *Server) createRouter() http.Handler {
 	hub := handler.NewHandlerHub(storage.NewMemStorage())
 
 	r := chi.NewRouter()
+
+	r.Use(middleware.MiddlewareLogger)
 
 	r.Get("/", hub.GetAllMetricsHandler)
 	r.Get("/value/{type}/{name}", hub.GetMetricHandler)
